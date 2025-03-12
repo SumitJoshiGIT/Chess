@@ -1,0 +1,22 @@
+{
+  "dependencies": {
+    "@prisma/client": "^6.3.1",
+    "hono": "^4.7.1",
+    "ioredis": "^5.5.0",
+    "jsonwebtoken": "^9.0.2",
+    "kafkajs": "^2.2.4",
+    "prisma": "^6.3.1",
+    "socket.io": "^4.8.1",
+    "uwebsockets": "^2.2.2"
+  },
+  "name": "rtcservice",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": ""
+}
