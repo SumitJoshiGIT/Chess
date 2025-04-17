@@ -66,6 +66,3 @@ app.get('/:id/:page',async (c)=>{
     }
 })
 
-// 
-
-app.get("/")
