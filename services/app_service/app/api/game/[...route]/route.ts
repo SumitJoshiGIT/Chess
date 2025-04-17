@@ -1,32 +1,27 @@
 import {Hono} from 'hono';
 import {handle} from 'hono/vercel';
-import getORM from '@/lib/orm';
 import {z} from 'zod';
-import {limiter} from 'hono/limiter';
-import getRedis from '@/src/server/redis';
+import {rateLimiter} from 'hono-rate-limiter';
+import getRedis from '@/server/redis';
 import { error } from 'console';
+import orm from '@/lib/orm';
 
 const app=new Hono().basePath('/api/game')
-const orm=getORM()
 const redis=getRedis()
+
 const objectIdSchema = z.string().regex(/^[a-fA-F0-9]{24}$/, "Invalid ObjectId");
 const outputSchema = z.object({
           
 })
 
-app.use(limiter({
+app.use(rateLimiter({
         windowMs:60000,
         limit:10,
-        standardHeaders:true,
-        legacyHeaders:false,
-        onLimitReached:(c)=>{
-            return c.json({success:false,error:"Rate limit exceeded"})
-        }
+        standardHeaders: 'draft-6',
+        keyGenerator: (c) => c.req.header('Authorization') || ''
       
 }))
 
-
-//
 app.get('/:id',async (c)=>{
       const id=objectIdSchema.safeParse(c.req.param('id'));
       if(!id){
@@ -49,9 +44,9 @@ app.get('/:id',async (c)=>{
 
 app.get('/:id/:page',async (c)=>{
     const id=objectIdSchema.safeParse(c.req.param('id'));
-    const page=z.number().safeParse(c.req.param('page'));
+    const pageResult = z.number().safeParse(Number(c.req.param('page')));
     
-    if(!(id&&page)){
+    if (!(id.success && pageResult.success)) {
       return c.json({ success: false, error: "Invalid parameters" }, 400);
     }
 
@@ -59,7 +54,7 @@ app.get('/:id/:page',async (c)=>{
           where: {
               id: c.req.param('id')
           },
-          skip: page * 10,
+          skip: pageResult.data * 10,
           take: 10
     });
 
