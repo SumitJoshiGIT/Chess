@@ -2,7 +2,7 @@ import {Hono} from 'hono';
 import {handle} from 'hono/vercel';
 import orm from '@/lib/orm';
 import {z} from 'zod';
-import {limiter} from 'hono/limiter';
+import {rateLimiter} from 'hono-rate-limiter';
 import getRedis from '@/server/redis';
 import { error } from 'console';
 import { useSession } from 'next-auth/react';
@@ -12,19 +12,17 @@ const redis=getRedis()
 const objectIdSchema = z.string().regex(/^[a-fA-F0-9]{24}$/, "Invalid ObjectId");
 
 
-app.use(limiter({
+
+app.use(rateLimiter({
         windowMs:60000,
         limit:10,
-        standardHeaders:true,
-        legacyHeaders:false,
-        onLimitReached:(c)=>{
-            return c.json({success:false,error:"Rate limit exceeded"})
-        }
+        standardHeaders: 'draft-6',
+        keyGenerator: (c) => c.req.header('Authorization') || ''
       
 }))
 
-
 app.get('/profile',async (c)=>{
+      const id = c.req.param('id');
       
       if(!id){
         return c.json({ success: false, error: "Invalid id" }, 400);
@@ -32,7 +30,7 @@ app.get('/profile',async (c)=>{
 
       const data=await orm.user.findUnique({
             where:{
-            id:c.req.param('id')
+            id: id
             }
       });
       
