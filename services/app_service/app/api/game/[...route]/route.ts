@@ -66,3 +66,5 @@ app.get('/:id/:page',async (c)=>{
     }
 })
 
+
+export default handle(app);
