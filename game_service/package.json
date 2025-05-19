@@ -1,0 +1,26 @@
+{
+  "name": "game_service",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "test:matchmaking": "tsx src/scripts/test-matchmaking.js"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.14.1",
+    "@prisma/client": "^6.8.2",
+    "chess.js": "^1.2.0",
+    "hono": "^4.7.10",
+    "prisma": "^6.8.2",
+    "redis": "^5.0.1",
+    "socket.io": "^4.8.1",
+    "socketio": "^1.0.0",
+    "zod": "^3.24.4"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.17",
+    "tsx": "^4.7.1",
+    "typescript": "^5.8.3"
+  }
+}

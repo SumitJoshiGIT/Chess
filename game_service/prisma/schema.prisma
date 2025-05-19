@@ -1,0 +1,42 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "mongodb"
+  url      = env("DATABASE_URL")
+}
+
+model Game {
+  id        String   @id  @default(auto()) @map("_id") @db.ObjectId
+  player1   Profile  @relation("White", fields: [uid1], references: [id])
+  player2   Profile  @relation("Black", fields: [uid2], references: [id])
+  uid1      String   @db.ObjectId
+  uid2      String   @db.ObjectId
+  moves     Int[]
+  createdAt DateTime @default(now())
+  @@unique([uid1, uid2])  // Composite unique constraint for the two players
+}
+
+model User {
+  id         String   @id @default(auto()) @map("_id") @db.ObjectId
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  name       String?
+  username   String  
+  email      String   @unique
+  isVerified Boolean  @default(true)
+  password   String?
+  profile    Profile? 
+}
+
+model Profile {
+  id         String   @id @default(auto()) @map("_id") @db.ObjectId
+  img        String?
+  bio        String?
+  uid        String   @db.ObjectId @unique // Foreign key reference to User.id
+  user       User     @relation(fields: [uid], references: [id])
+  GameAsWhite Game[]  @relation("White")
+  GameAsBlack Game[]  @relation("Black")
+}
