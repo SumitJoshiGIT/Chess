@@ -1,24 +1,26 @@
-import { makeMove, getGame, updateGame } from '../lib/redis.js';
+import { makeMove, getGame, updateGame, checkGameTimeout } from '../lib/redis.js';
 
 // Validate if a move is legal in chess (simplified validation)
 function isValidChessMove(move: string, gameState: any): boolean {
   // This is a very simplified validation
   // In a real app, you'd use a chess engine library to validate moves
-  const movePattern = /^[a-h][1-8]-[a-h][1-8]$/;
-  return movePattern.test(move);
+  // For PGN, you might want to use a library like chess.js to validate the move against the current game state
+  // For now, we'll assume the client sends a valid PGN string
+  return typeof move === 'string' && move.length > 1;
 }
 
 // Make a move in a game
 export async function executeMove(gameId: string, userId: string, moveData: {
-  startX: number, 
-  startY: number, 
-  endX: number, 
-  endY: number,
+  pgnMove: string, // Changed from coordinates to PGN string
   promotion?: string
 }) {
   try {
+    // First check if the game has timed out before allowing the move
+    await checkGameTimeout(gameId);
+    
     // Use the Redis function to make the move
-    const updatedGameState = await makeMove(gameId, userId, moveData);
+    // The makeMove function in redis.js has been updated to accept pgnMove and promotion
+    const updatedGameState = await makeMove(gameId, userId, moveData.pgnMove, moveData.promotion);
     
     return updatedGameState;
   } catch (error) {

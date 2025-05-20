@@ -1,9 +1,10 @@
 import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
+import {redisClient} from './lib/redis.ts';
 import { logger } from 'hono/logger';
-import gameRoutes from './routes/game.js';
 import socketApp, { setupSocketIO } from './routes/socket.js';
+import gameApp from './routes/game.js';
 
 const app = new Hono();
 
@@ -14,33 +15,32 @@ app.use('*', cors({
   credentials: true
 }));
 
-// Health check
 app.get('/', (c) => {
   return c.json({ status: 'ok', message: 'Chess Game Service API' });
 });
 
-// Mount routes
-app.route('/api/games', gameRoutes);
 app.route('/socket', socketApp);
+app.route('/game', gameApp);
 
-// Set up server with Socket.io
 const PORT = parseInt(process.env.PORT || '8000');
 const server = serve({
   fetch: app.fetch,
   port: PORT
 });
-
-// Setup Socket.io with the server
 const io = setupSocketIO(server);
 
-// Handle graceful shutdown
 const shutdown = () => {
   console.log('Shutting down Chess Game Service...');
-  
-  // Import stopQueueProcessor dynamically to avoid circular dependency
-  import('./controllers/queueProcessor.js').then(({ stopQueueProcessor }) => {
-    stopQueueProcessor();
-    process.exit(0);
+  Promise.all([
+    import('./controllers/queueProcessor.js').then(({ stopQueueProcessor }) => stopQueueProcessor()),
+    import('./controllers/timeoutChecker.js').then(({ stopTimeoutChecker }) => stopTimeoutChecker())
+    
+  ]).then(() => {
+     redisClient.flushAll().then(() => {
+     process.exit(0);});
+  }).catch(err => {
+    console.error('Error during shutdown:', err);
+    process.exit(1);
   });
 };
 
@@ -48,4 +48,11 @@ const shutdown = () => {
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
 
-console.log(`Chess Game Service running on port ${PORT}`);
+// Start background processes
+Promise.all([
+  import('./controllers/timeoutChecker.js').then(({ startTimeoutChecker }) => startTimeoutChecker())
+]).then(() => {
+  console.log(`Chess Game Service running on port ${PORT}`);
+}).catch(err => {
+  console.error('Error starting background processes:', err);
+});

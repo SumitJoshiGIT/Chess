@@ -1,52 +1,27 @@
-import { createClient } from 'redis';
-import { createGame } from '../lib/redis.js';
+import { redisClient, createGame } from '../lib/redis.js';
 import { getGameTypes } from './matchmaking.js';
 
-const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
 const MATCH_TIMEOUT_SECONDS = 120; // 2 minutes
 const ELO_RANGE_INITIAL = 100;
 const ELO_RANGE_INCREMENT = 50;
 const ELO_RANGE_MAX = 400;
 const PROCESSOR_INTERVAL_MS = 5000; // 5 seconds
 
-// Redis client setup
-const redisClient = createClient({
-  url: REDIS_URL
-});
-
-// Connect to Redis when this module is imported
-(async () => {
-  try {
-    await redisClient.connect();
-    console.log('Queue Processor: Connected to Redis');
-  } catch (error) {
-    console.error('Queue Processor: Redis connection error:', error);
-  }
-})();
-
-// Handle Redis connection errors
-redisClient.on('error', (err) => {
-  console.error('Queue Processor: Redis connection error:', err);
-});
-
-// Get match queue key for specific game type
 function getQueueKey(gameTypeId: string) {
   return `matchmaking:queue:${gameTypeId}`;
 }
 
-// Process the matchmaking queue for a specific game type
 async function processQueueForGameType(gameTypeId: string, io: any) {
   try {
     const queueKey = getQueueKey(gameTypeId);
     const queueMembers = await redisClient.hGetAll(queueKey);
     
-    // If queue has less than 2 players, nothing to do
+     
     if (Object.keys(queueMembers).length < 2) {
       return;
     }
     
-    // Convert to array for easier processing
-    const queuedPlayers = Object.entries(queueMembers).map(([userId, dataStr]) => {
+    const queuedPlayers = Object.entries(queueMembers).map(([userId, dataStr]:[any,any]) => {
       const data = JSON.parse(dataStr);
       return {
         userId,
@@ -56,99 +31,96 @@ async function processQueueForGameType(gameTypeId: string, io: any) {
       };
     });
     
-    // Sort by time in queue (oldest first)
+    console.log(`[${new Date().toISOString()}] Queue ${gameTypeId} players: ${queuedPlayers.map(p => `${p.userId}(${p.elo})`).join(', ')}`);
+    
     queuedPlayers.sort((a, b) => a.queuedAt - b.queuedAt);
     
-    // Process each player waiting for a match
     for (let i = 0; i < queuedPlayers.length; i++) {
       const player = queuedPlayers[i];
-      
-      // Check if player has been in queue too long
-      const timeInQueue = Date.now() - player.queuedAt;
+       const timeInQueue = Date.now() - player.queuedAt;
       if (timeInQueue > MATCH_TIMEOUT_SECONDS * 1000) {
-        // Time out the player
+        console.log(`[${new Date().toISOString()}] Timeout for player ${player.userId} in queue ${gameTypeId}. Time in queue: ${timeInQueue/1000}s`);
         await redisClient.hDel(queueKey, player.userId);
         await redisClient.del(`matchmaking:timeout:${player.userId}`);
         
-        // Notify player about timeout
         const playerSocketId = await redisClient.hGet('users:online', player.userId);
         if (playerSocketId) {
           io.to(playerSocketId).emit('matchmaking-status', {
-            status: 'timeout',
+            success: false,
             message: 'No suitable match found in time.'
           });
+          console.log(`[${new Date().toISOString()}] Sent timeout notification to player ${player.userId}`);
         }
         
-        continue; // Skip to next player
+        continue;
       }
       
-      // This player has already been matched
       if (await redisClient.exists(`matchmaking:match:${player.userId}`)) {
         continue;
       }
       
-      // Calculate starting ELO range based on time in queue
-      // The longer in queue, the wider the ELO range
       const timeBasedEloRange = Math.min(
         ELO_RANGE_MAX,
         ELO_RANGE_INITIAL + Math.floor(timeInQueue / 10000) * ELO_RANGE_INCREMENT
       );
       
-      // Look for suitable match
+      console.log(`[${new Date().toISOString()}] Player ${player.userId} (${player.elo}) has been in queue for ${timeInQueue/1000}s. Using ELO range: ${timeBasedEloRange}`);
+      
       for (let j = 0; j < queuedPlayers.length; j++) {
-        if (i === j) continue; // Skip self
+        if (i === j) continue; 
         
         const potentialMatch = queuedPlayers[j];
         
-        // Skip if already matched
         if (await redisClient.exists(`matchmaking:match:${potentialMatch.userId}`)) {
+          console.log(`[${new Date().toISOString()}] Player ${potentialMatch.userId} already matched. Skipping.`);
           continue;
         }
         
-        // Check ELO range
         const eloDiff = Math.abs(player.elo - potentialMatch.elo);
+        console.log(`[${new Date().toISOString()}] Comparing ${player.userId}(${player.elo}) with ${potentialMatch.userId}(${potentialMatch.elo}). ELO diff: ${eloDiff}, Max allowed: ${timeBasedEloRange}`);
+        
         if (eloDiff <= timeBasedEloRange) {
-          // We found a match!
-          
-          // Remove both players from queue
           await redisClient.hDel(queueKey, player.userId);
           await redisClient.hDel(queueKey, potentialMatch.userId);
-          
-          // Remove timeout keys
           await redisClient.del(`matchmaking:timeout:${player.userId}`);
           await redisClient.del(`matchmaking:timeout:${potentialMatch.userId}`);
           
-          // Create a new game with both players
+          console.log(`[${new Date().toISOString()}] MATCH FOUND: Creating game for ${player.userId} and ${potentialMatch.userId} for game type ${gameTypeId}`);
           const { gameId, game } = await createGame(player.userId, potentialMatch.userId, gameTypeId);
+          console.log(`[${new Date().toISOString()}] Game created with ID: ${gameId}`);
           
-          // Notify both players
           const player1SocketId = await redisClient.hGet('users:online', player.userId);
           const player2SocketId = await redisClient.hGet('users:online', potentialMatch.userId);
           
           if (player1SocketId) {
+            console.log(`[${new Date().toISOString()}] Notifying player ${player.userId} (socket ${player1SocketId}) about match`);
             io.to(player1SocketId).emit('matchmaking-status', {
-              status: 'matched',
+              success: true,
               message: `Match found with player (ELO: ${potentialMatch.elo})`,
               gameId,
               opponent: potentialMatch.userId,
               opponentElo: potentialMatch.elo,
               game
             });
+          } else {
+            console.log(`[${new Date().toISOString()}] WARNING: Player ${player.userId} socket not found!`);
           }
           
           if (player2SocketId) {
+            console.log(`[${new Date().toISOString()}] Notifying player ${potentialMatch.userId} (socket ${player2SocketId}) about match`);
             io.to(player2SocketId).emit('matchmaking-status', {
-              status: 'matched',
+              success: true,
               message: `Match found with player (ELO: ${player.elo})`,
               gameId,
               opponent: player.userId,
               opponentElo: player.elo,
               game
             });
+          } else {
+            console.log(`[${new Date().toISOString()}] WARNING: Player ${potentialMatch.userId} socket not found!`);
           }
           
-          // Log the match
-          console.log(`Matched players: ${player.userId} (${player.elo}) & ${potentialMatch.userId} (${potentialMatch.elo}) for ${gameTypeId}`);
+          console.log(`[${new Date().toISOString()}] MATCH COMPLETE: ${player.userId} (${player.elo}) & ${potentialMatch.userId} (${potentialMatch.elo}) for ${gameTypeId} in game ${gameId}`);
           
           break; // Move to next player
         }

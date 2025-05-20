@@ -1,0 +1,81 @@
+import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from "@/components/ui/table";
+
+interface MoveHistoryProps {
+  moves?: Array<{
+    from?: string;
+    to?: string;
+    piece?: string;
+    san?: string;
+    notation?: string;
+  }> | string[];
+  moveHistory?: string[]; // For backward compatibility
+}
+
+export default function MoveHistory({ moves, moveHistory }: MoveHistoryProps) {
+  // Format moves into pairs for display (white and black moves)
+  const formattedMoves = [];
+  
+  // Use either moves or moveHistory
+  const movesToUse = moves || moveHistory || [];
+  
+  for (let i = 0; i < movesToUse.length; i += 2) {
+    formattedMoves.push({
+      number: Math.floor(i / 2) + 1,
+      white: getMoveNotation(movesToUse[i]),
+      black: i + 1 < movesToUse.length ? getMoveNotation(movesToUse[i + 1]) : ""
+    });
+  }
+
+  // Helper function to get a consistent notation from different move formats
+  function getMoveNotation(move: any): string {
+    if (!move) return "";
+    
+    // If it's a simple string (for backward compatibility)
+    if (typeof move === 'string') return move;
+    
+    // Use SAN notation if available (Standard Algebraic Notation)
+    if (move.san) return move.san;
+    
+    // Use custom notation if available
+    if (move.notation) return move.notation;
+    
+    // Fall back to from-to format
+    if (move.from && move.to) {
+      return `${move.piece || ""}${move.from}-${move.to}`;
+    }
+    
+    // Last resort: stringify the object
+    return JSON.stringify(move);
+  }
+
+  return (
+    <div className="w-full max-h-[500px] overflow-auto">
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead className="w-[60px]">#</TableHead>
+            <TableHead>White</TableHead>
+            <TableHead>Black</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {formattedMoves.length > 0 ? (
+            formattedMoves.map((moveSet) => (
+              <TableRow key={moveSet.number}>
+                <TableCell>{moveSet.number}</TableCell>
+                <TableCell>{moveSet.white}</TableCell>
+                <TableCell>{moveSet.black}</TableCell>
+              </TableRow>
+            ))
+          ) : (
+            <TableRow>
+              <TableCell colSpan={3} className="text-center text-gray-500">
+                No moves yet
+              </TableCell>
+            </TableRow>
+          )}
+        </TableBody>
+      </Table>
+    </div>
+  );
+}

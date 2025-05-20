@@ -1,22 +1,5 @@
-import { createClient } from 'redis';
+import { redisClient } from '../lib/redis.js';
 import { Chess } from 'chess.js';
-
-const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
-
-// Redis client setup
-const redisClient = createClient({
-  url: REDIS_URL
-});
-
-// Connect to Redis when this module is imported
-(async () => {
-  try {
-    await redisClient.connect();
-    console.log('Promotion controller: Connected to Redis');
-  } catch (error) {
-    console.error('Promotion controller: Redis connection error:', error);
-  }
-})();
 
 // Check if a move requires promotion
 export async function checkPromotion(gameId: string, moveData: { 

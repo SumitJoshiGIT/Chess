@@ -1,0 +1,415 @@
+"use client";
+
+import { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { Chessboard } from "react-chessboard";
+import { Chess } from "chess.js";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import PlayerCard from "@/components/custom/PlayerCard";
+import MoveHistory from "@/components/custom/MoveHistory";
+import PromotionDialog from "@/components/custom/PromotionDialog";
+import { useSocket, MoveData } from "@/components/custom/Socket";
+import { useToast } from "@/components/ui/use-toast";
+import ChessGameClock from "@/components/custom/ChessGameClock";
+
+// Types
+interface PlayerProfile {
+  id: string;
+  name: string;
+  elo: number;
+}
+
+interface ChessGameProps {
+  gameID: string;
+}
+
+// Main component
+export default function ChessGame({ gameID }: ChessGameProps) {
+  // Socket and game state
+  const { isConnected, gameState, makeMove, resignGame, offerDraw, acceptDraw, joinGame } = useSocket();
+  const { toast } = useToast();
+  
+  // Game state
+  const [game, setGame] = useState(new Chess());
+  const [customSquareStyles, setCustomSquareStyles] = useState<Record<string, React.CSSProperties>>({});
+  
+  // Player state
+  const [userColor, setUserColor] = useState<'white' | 'black' | null>(null);
+  const [boardOrientation, setBoardOrientation] = useState<'white' | 'black'>('white');
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [whitePlayerProfile, setWhitePlayerProfile] = useState<PlayerProfile | null>(null);
+  const [blackPlayerProfile, setBlackPlayerProfile] = useState<PlayerProfile | null>(null);
+  
+  // Game controls
+  const [showDrawOffer, setShowDrawOffer] = useState(false);
+  const [showPromotion, setShowPromotion] = useState(false);
+  const [pendingMove, setPendingMove] = useState<{sourceSquare: string; targetSquare: string;} | null>(null);
+  
+  // Clock state
+  const [whiteTime, setWhiteTime] = useState(600);
+  const [blackTime, setBlackTime] = useState(600);
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
+  
+  // Get current user ID
+  useEffect(() => {
+    setCurrentUserId(localStorage.getItem('userId'));
+  }, []);
+  
+  // Join game on connection
+  useEffect(() => {
+    if (isConnected && gameID) {
+      joinGame(gameID);    
+      localStorage.setItem('chess_game_in_progress', 'true');
+      localStorage.setItem('chess_current_game_id', gameID);
+      localStorage.removeItem('chess_matchmaking_status');
+    }
+  }, [isConnected, gameID, joinGame]);
+  
+  // Profile management
+  useEffect(() => {
+    const fetchUserProfile = async (playerId: string, type: 'white' | 'black') => {
+      if (!playerId) return;
+      
+      // Skip if profile already loaded
+      const currentProfile = type === 'white' ? whitePlayerProfile : blackPlayerProfile;
+      if (currentProfile?.id === playerId) return;
+      
+      try {
+        const response = await fetch(`/api/user/profile/${playerId}`); 
+        if (!response.ok) {
+          const fallbackProfile = { 
+            id: playerId, 
+            name: `Player ${playerId.substring(0,6)}`, 
+            elo: 1200 
+          };
+          if (type === 'white') setWhitePlayerProfile(fallbackProfile);
+          if (type === 'black') setBlackPlayerProfile(fallbackProfile);
+          return;
+        }
+        
+        const data = await response.json();
+        const profile = { 
+          id: playerId,
+          name: data.name || `Player ${playerId.substring(0,6)}`, 
+          elo: data.elo || 1200 
+        };
+        
+        if (type === 'white') setWhitePlayerProfile(profile);
+        if (type === 'black') setBlackPlayerProfile(profile);
+      } catch (err) {
+        const fallbackProfile = { 
+          id: playerId, 
+          name: `Player ${playerId.substring(0,6)}`, 
+          elo: 1200 
+        };
+        if (type === 'white') setWhitePlayerProfile(fallbackProfile);
+        if (type === 'black') setBlackPlayerProfile(fallbackProfile);
+      }
+    };
+
+    if (gameState?.players) {
+      // Fetch white player profile
+      if (gameState.players.white) {
+        fetchUserProfile(gameState.players.white, 'white');
+      } else if (whitePlayerProfile) {
+        setWhitePlayerProfile(null);
+      }
+      
+      // Fetch black player profile
+      if (gameState.players.black) {
+        fetchUserProfile(gameState.players.black, 'black');
+      } else if (blackPlayerProfile) {
+        setBlackPlayerProfile(null);
+      }
+    }
+  }, [gameState?.players, whitePlayerProfile, blackPlayerProfile]);
+  
+  // Handle game state updates from server
+  useEffect(() => {
+    if (!gameState) return;
+    
+    // Handle draw offers
+    if (gameState.drawOffer) {
+      const userId = localStorage.getItem('userId');
+      if (userId && gameState.drawOffer.by !== userId) {
+        setShowDrawOffer(true);
+        toast({
+          title: "Draw Offered",
+          description: "Your opponent has offered a draw",
+        });
+      }
+    } else {
+      setShowDrawOffer(false);
+    }
+    
+    // Set user color (only once when joining)
+    if (currentUserId && !userColor) {
+      if (gameState.players.white === currentUserId) {
+        setUserColor('white');
+        setBoardOrientation('white');
+      } else if (gameState.players.black === currentUserId) {
+        setUserColor('black');
+        setBoardOrientation('black');
+      }
+    }
+    
+    // Update game board from FEN
+    if (gameState.fen || gameState.board) {
+      const fenToLoad = gameState.fen || gameState.board;
+      if (typeof fenToLoad === 'string' && fenToLoad !== game.fen()) {
+        setGame(new Chess(fenToLoad));
+      }
+    }
+    
+    // Highlight last move
+    if (gameState.moves && gameState.moves.length > 0) {
+      const lastMove = gameState.moves[gameState.moves.length - 1];
+      if (lastMove?.from?.square && lastMove?.to?.square) {
+        setCustomSquareStyles({
+          [lastMove.from.square]: { backgroundColor: 'rgba(255, 255, 0, 0.4)' },
+          [lastMove.to.square]: { backgroundColor: 'rgba(255, 255, 0, 0.4)' },
+        });
+      } else {
+        setCustomSquareStyles({});
+      }
+    } else {
+      setCustomSquareStyles({});
+    }
+    
+    // Update clock times
+    if (gameState.timeControl) {
+      // Get times from server
+      const whiteTimeFromServer = gameState.timeControl.white;
+      const blackTimeFromServer = gameState.timeControl.black;
+      const lastMoveTimeFromServer = gameState.timeControl.lastMoveTime;
+      
+      // Initial time update (ChessGameClock component will handle the rest)
+      setWhiteTime(whiteTimeFromServer);
+      setBlackTime(blackTimeFromServer);
+    }
+    }
+    
+    // Cleanup timer on unmount
+    return () => {
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+    };
+  }, [gameState, game, toast, currentUserId, userColor]);
+  
+  // Format time for display
+  const formatTime = useCallback((seconds: number): string => {
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
+  }, []);
+  
+  // Handle piece moves
+  const onDrop = useCallback((sourceSquare: string, targetSquare: string, piece: string) => {
+    if (!gameState || gameState.status !== 'active') return false;
+    
+    // Verify it's the user's turn
+    const isWhiteTurn = gameState.turn === 'w';
+    if ((isWhiteTurn && userColor !== 'white') || (!isWhiteTurn && userColor !== 'black')) {
+      toast({
+        title: "Not your turn",
+        description: "Please wait for your opponent to move",
+        variant: "destructive"
+      });
+      return false;
+    }
+    
+    // Validate the move
+    const tempGame = new Chess(game.fen());
+    const moveAttempt = tempGame.move({ from: sourceSquare, to: targetSquare });
+
+    if (!moveAttempt) {
+      toast({
+        title: "Invalid Move",
+        description: "The attempted move is not legal.",
+        variant: "destructive"
+      });
+      return false;
+    }
+
+    // Handle pawn promotion
+    if (moveAttempt.flags.includes('p')) {
+      setPendingMove({ sourceSquare, targetSquare });
+      setShowPromotion(true);
+      return false;
+    }
+
+    // Send regular move to server
+    makeMove(gameID, { pgnMove: moveAttempt.san });
+    
+    // Let server update the game state
+    return false;
+  }, [gameState, game, userColor, toast, makeMove, gameID]);
+  
+  // Check if game is over
+  const isGameOver = useMemo(() => 
+    gameState && ['checkmate', 'drawn', 'resigned', 'timeout'].includes(gameState.status),
+    [gameState]
+  );
+  
+  // Generate player display info
+  const playerDisplays = useMemo(() => ({
+    white: {
+      name: whitePlayerProfile?.name || 
+            (gameState?.players.white === currentUserId ? "You" : 
+            (gameState?.players.white ? `P ${gameState.players.white.substring(0,4)}` : "White")),
+      elo: whitePlayerProfile?.elo || 1200
+    },
+    black: {
+      name: blackPlayerProfile?.name || 
+            (gameState?.players.black === currentUserId ? "You" : 
+            (gameState?.players.black ? `P ${gameState.players.black.substring(0,4)}` : "Black")),
+      elo: blackPlayerProfile?.elo || 1200
+    }
+  }), [whitePlayerProfile, blackPlayerProfile, gameState?.players, currentUserId]);
+  
+  // Handle promotion selection
+  const handlePromotion = useCallback((promotionPiece: string) => {
+    if (!pendingMove) return;
+    
+    const tempGame = new Chess(game.fen());
+    const promotionMove = tempGame.move({
+      from: pendingMove.sourceSquare,
+      to: pendingMove.targetSquare,
+      promotion: promotionPiece.toLowerCase()
+    });
+
+    if (promotionMove) {
+      makeMove(gameID, { pgnMove: promotionMove.san });
+    } else {
+      toast({
+        title: "Promotion Error",
+        description: "Could not apply the promotion.",
+        variant: "destructive"
+      });
+    }
+    
+    setPendingMove(null);
+    setShowPromotion(false);
+  }, [pendingMove, game, makeMove, gameID, toast]);
+
+  return (
+    <div className="flex flex-col lg:flex-row gap-4 w-full p-2 md:p-4">
+      {/* Game board column */}
+      <div className="flex-1">
+        {/* Black player info */}
+        <div className="flex flex-col md:flex-row md:justify-between gap-2 mb-4">
+          <PlayerCard 
+            name={playerDisplays.black.name} 
+            elo={playerDisplays.black.elo} 
+            time={formatTime(blackTime)}
+            isActive={gameState?.turn === 'b'}
+          />
+          
+          {/* Game controls */}
+          <div className="flex flex-wrap gap-2 justify-center md:justify-end">
+            {showDrawOffer && (
+              <div className="flex gap-2 items-center bg-yellow-50 p-2 rounded-md border border-yellow-200">
+                <span className="text-sm">Draw offered</span>
+                <Button 
+                  variant="outline" 
+                  size="sm"
+                  onClick={() => {
+                    acceptDraw(gameID);
+                    setShowDrawOffer(false);
+                  }}
+                >Accept</Button>
+                <Button 
+                  variant="ghost" 
+                  size="sm"
+                  onClick={() => setShowDrawOffer(false)}
+                >Decline</Button>
+              </div>
+            )}
+            <Button 
+              variant="outline" 
+              size="sm"
+              onClick={() => resignGame(gameID)}
+              disabled={!gameState || isGameOver}
+            >Resign</Button>
+            <Button 
+              variant="outline" 
+              size="sm"
+              onClick={() => offerDraw(gameID)}
+              disabled={!gameState || isGameOver || showDrawOffer}
+            >Offer Draw</Button>
+          </div>
+        </div>
+        
+        {/* Chess Board */}
+        <div className="aspect-square">
+          <Card>
+            <CardContent className="p-2">
+              <Chessboard 
+                position={game.fen()}
+                onPieceDrop={onDrop}
+                boardOrientation={boardOrientation}
+                customBoardStyle={{
+                  borderRadius: '4px',
+                  boxShadow: '0 2px 10px rgba(0, 0, 0, 0.2)',
+                }}
+                areArrowsAllowed={true}
+                customSquareStyles={customSquareStyles}
+              />
+            </CardContent>
+          </Card>
+        </div>
+        
+        {/* White player & game result */}
+        <div className="flex flex-col md:flex-row justify-between mt-4 gap-2">
+          <PlayerCard 
+            name={playerDisplays.white.name} 
+            elo={playerDisplays.white.elo} 
+            time={formatTime(whiteTime)}
+            isActive={gameState?.turn === 'w'}
+          />
+          
+          {isGameOver && (
+            <div className="bg-gray-100 p-2 rounded-md text-center">
+              <p className="font-semibold">Game Over: {gameState?.status}</p>
+              {gameState?.winner && <p>Winner: {gameState.winner}</p>}
+            </div>
+          )}
+        </div>
+      </div>
+      
+      {/* Game info sidebar */}
+      <div className="md:w-64 flex flex-col gap-4 mt-4 lg:mt-0">
+        <div className="border rounded-md p-4 bg-white shadow-sm">
+          <h3 className="font-semibold mb-2">Game Info</h3>
+          <p>ID: {gameID}</p>
+          <p>Status: {gameState?.status || "Loading..."}</p>
+          <p>Time Control: {gameState?.timeControl?.increment 
+            ? `${Math.floor((gameState.timeControl.white || 600)/60)}+${gameState.timeControl.increment}` 
+            : "Unknown"}</p>
+        </div>
+        
+        {/* Move history */}
+        <div className="border rounded-md p-4 bg-white shadow-sm flex-1 overflow-auto">
+          <h3 className="font-semibold mb-2">Move History</h3>
+          {gameState?.moves 
+            ? <MoveHistory moves={gameState.moves} />
+            : <p className="text-gray-500">No moves yet</p>
+          }
+        </div>
+      </div>
+      
+      {/* Promotion dialog */}
+      <PromotionDialog 
+        isOpen={showPromotion}
+        playerColor={userColor || 'white'}
+        onSelect={handlePromotion}
+        onClose={() => {
+          setPendingMove(null);
+          setShowPromotion(false);
+        }}
+      />
+    </div>
+  );
+}

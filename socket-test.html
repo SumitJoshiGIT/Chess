@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Chess Game Socket.IO Tester</title>
+    <script src="https://cdn.socket.io/4.6.0/socket.io.min.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 0; padding: 20px; }
+        #log { height: 400px; border: 1px solid #ccc; overflow-y: scroll; padding: 10px; margin-bottom: 20px; }
+        .input-row { margin-bottom: 10px; }
+        button { padding: 8px 16px; margin-right: 10px; }
+        input, select { padding: 8px; margin-right: 10px; }
+        .message { margin-bottom: 5px; }
+        .received { color: green; }
+        .sent { color: blue; }
+        .system { color: gray; font-style: italic; }
+        .error { color: red; }
+    </style>    
+</head>
+<body>
+    <h1>Chess Game Socket.IO Tester</h1>
+    
+    <div class="input-row">
+        <label for="userId">User ID:</label>
+        <input type="text" id="userId" value="testuser123">
+        
+        <label for="elo">ELO Rating:</label>
+        <input type="text" id="elo" value="1200">
+        
+        <button id="connect">Connect</button>
+        <button id="disconnect">Disconnect</button>
+        <span id="status">Disconnected</span>
+    </div>
+    
+    <h2>Event Sender</h2>
+    <div class="input-row">
+        <select id="eventType">
+            <option value="find-match">Find Match</option>
+            <option value="cancel-matchmaking">Cancel Matchmaking</option>
+            <option value="check-match">Check Match Status</option>
+            <option value="make-move">Make Move</option>
+            <option value="join-game">Join Game</option>
+            <option value="resign">Resign</option>
+            <option value="offer-draw">Offer Draw</option>
+            <option value="accept-draw">Accept Draw</option>
+        </select>
+        
+        <label for="payload">Payload (JSON):</label>
+        <input type="text" id="payload" style="width: 400px;" value='{"gameTypeId": "rapid"}'>
+        
+        <button id="send">Send Event</button>
+    </div>
+    
+    <h2>Event Log</h2>
+    <div id="log"></div>
+    
+    <script>
+        let socket;
+        const log = document.getElementById('log');
+        const statusSpan = document.getElementById('status');
+        
+        function addToLog(message, type) {
+            const msgElement = document.createElement('div');
+            msgElement.className = `message ${type}`;
+            msgElement.textContent = message;
+            log.appendChild(msgElement);
+            log.scrollTop = log.scrollHeight;
+        }
+        
+        document.getElementById('connect').addEventListener('click', () => {
+            const userId = document.getElementById('userId').value;
+            const elo = document.getElementById('elo').value;
+            
+            try {
+                // Create socket connection with auth and better configuration
+                socket = io('http://localhost:8000', {
+                    auth: { userId, elo },
+                    transports: ['websocket', 'polling'], // Try WebSocket first, then polling
+                    reconnectionAttempts: 5,
+                    reconnectionDelay: 1000,
+                    timeout: 20000 // Increase connection timeout
+                });
+                
+                // Connection events
+                socket.on('connect', () => {
+                    statusSpan.textContent = 'Connected';
+                    statusSpan.style.color = 'green';
+                    addToLog(`Connected with ID: ${socket.id} using transport: ${socket.io.engine.transport.name}`, 'system');
+                });
+                
+                socket.on('disconnect', (reason) => {
+                    statusSpan.textContent = 'Disconnected: ' + reason;
+                    statusSpan.style.color = 'red';
+                    addToLog(`Disconnected: ${reason}`, 'system');
+                });
+                
+                socket.on('connect_error', (error) => {
+                    statusSpan.textContent = 'Connection Error';
+                    statusSpan.style.color = 'red';
+                    addToLog(`Connection Error: ${error.message}`, 'error');
+                    console.error('Connect error details:', error);
+                });
+                
+                // Add transport change events for debugging
+                socket.io.engine.on('transportError', (err) => {
+                    addToLog(`Transport Error: ${err.message || 'Unknown error'}`, 'error');
+                });
+                
+                socket.io.engine.on('upgrade', (transport) => {
+                    addToLog(`Transport upgraded to: ${transport}`, 'system');
+                });
+                
+                socket.io.engine.on('close', (reason) => {
+                    addToLog(`Transport closed: ${reason}`, 'system');
+                });
+                
+                // Game-specific events
+                socket.on('matchmaking-status', (data) => {
+                    addToLog(`Received [matchmaking-status]: ${JSON.stringify(data)}`, 'received');
+                });
+                
+                socket.on('game-joined', (data) => {
+                    addToLog(`Received [game-joined]: ${JSON.stringify(data)}`, 'received');
+                });
+                
+                socket.on('game-state', (data) => {
+                    addToLog(`Received [game-state]: ${JSON.stringify(data)}`, 'received');
+                });
+                
+                socket.on('move-made', (data) => {
+                    addToLog(`Received [move-made]: ${JSON.stringify(data)}`, 'received');
+                });
+                
+                socket.on('game-over', (data) => {
+                    addToLog(`Received [game-over]: ${JSON.stringify(data)}`, 'received');
+                });
+                
+                // Add a catch-all handler for other events
+                const originalOnevent = socket.onevent;
+                socket.onevent = function(packet) {
+                    const event = packet.data[0];
+                    
+                    // Only log events we haven't explicitly handled above
+                    if (!['matchmaking-status', 'game-joined', 'game-state', 'move-made', 'game-over'].includes(event)) {
+                        const data = packet.data[1];
+                        addToLog(`Received [${event}]: ${JSON.stringify(data)}`, 'received');
+                    }
+                    
+                    originalOnevent.call(this, packet);
+                };
+                
+            } catch (err) {
+                addToLog(`Error creating connection: ${err.message}`, 'error');
+            }
+        });
+        
+        document.getElementById('disconnect').addEventListener('click', () => {
+            if (socket) {
+                socket.disconnect();
+                statusSpan.textContent = 'Disconnected';
+                statusSpan.style.color = 'black';
+                addToLog('Manually disconnected', 'system');
+            }
+        });
+        
+        document.getElementById('send').addEventListener('click', () => {
+            if (!socket || !socket.connected) {
+                addToLog('Cannot send - not connected', 'error');
+                return;
+            }
+            
+            const eventType = document.getElementById('eventType').value;
+            let payload;
+            
+            try {
+                payload = JSON.parse(document.getElementById('payload').value);
+            } catch (err) {
+                addToLog(`Invalid JSON: ${err.message}`, 'error');
+                return;
+            }
+            
+            socket.emit(eventType, payload);
+            addToLog(`Sent [${eventType}]: ${JSON.stringify(payload)}`, 'sent');
+            
+            // Update payload field based on selected event
+            updatePayloadTemplate();
+        });
+        
+        // Update payload template when event type changes
+        document.getElementById('eventType').addEventListener('change', updatePayloadTemplate);
+        
+        function updatePayloadTemplate() {
+            const eventType = document.getElementById('eventType').value;
+            let template = '';
+            
+            switch(eventType) {
+                case 'find-match':
+                    template = '{"gameTypeId": "rapid"}';
+                    break;
+                case 'cancel-matchmaking':
+                    template = '{}';
+                    break;
+                case 'check-match':
+                    template = '{}';
+                    break;
+                case 'make-move':
+                    template = '{"gameId": "game123", "move": {"startX": 0, "startY": 6, "endX": 0, "endY": 4}}';
+                    break;
+                case 'join-game':
+                    template = '{"gameId": "game123"}';
+                    break;
+                case 'resign':
+                    template = '{"gameId": "game123"}';
+                    break;
+                case 'offer-draw':
+                    template = '{"gameId": "game123"}';
+                    break;
+                case 'accept-draw':
+                    template = '{"gameId": "game123"}';
+                    break;
+                default:
+                    template = '{}';
+            }
+            
+            document.getElementById('payload').value = template;
+        }
+        
+        // Initial payload template
+        updatePayloadTemplate();
+    </script>
+</body>
+</html>
